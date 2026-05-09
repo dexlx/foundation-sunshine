@@ -94,6 +94,19 @@ install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/helper/"
         DESTINATION "tools"
         COMPONENT assets)
 
+# Voice Changer sidecar: Python sidecar service + dependency installer.
+# Excludes models/ directory (potentially huge .pth files); they are
+# downloaded on first run by install-voice-changer-deps.ps1.
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/tools/voice_changer_server/"
+        DESTINATION "voice_changer"
+        COMPONENT voicechanger
+        PATTERN "models" EXCLUDE
+        PATTERN "__pycache__" EXCLUDE
+        PATTERN "*.pyc" EXCLUDE)
+install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/voice_changer/"
+        DESTINATION "scripts/voice_changer"
+        COMPONENT voicechanger)
+
 # Sunshine assets
 install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/assets/"
         DESTINATION "${SUNSHINE_ASSETS_DIR}"
