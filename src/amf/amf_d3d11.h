@@ -7,8 +7,10 @@
 #include "amf_encoder.h"
 
 #include <d3d11.h>
+#include <deque>
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 #include <AMF/components/Component.h>
 #include <AMF/core/Context.h>
@@ -93,16 +95,21 @@ namespace amf {
     // Whether the driver supports QUERY_TIMEOUT (FFmpeg-style safety check)
     bool query_timeout_supported = false;
 
-    // Current LTR state for RFI
-    static constexpr int MAX_LTR_SLOTS = 2;
-    static constexpr uint64_t LTR_MARK_INTERVAL = 30;  // Mark LTR every N frames
+    // Current LTR state for RFI.
+    // Slot 0 is reserved as the IDR baseline (set on every IDR, never overwritten by
+    // periodic marks) so RFI always has a known-good fallback even when every recent
+    // periodic-marked frame was inside a packet-loss window. Slots 1..N-1 form a
+    // sliding window of more recent anchors.
+    static constexpr int MAX_LTR_SLOTS = 4;
+    static constexpr uint64_t LTR_MARK_INTERVAL = 4;  // Mark LTR every N frames
     int effective_ltr_slots = 0;    // Clamped to min(max_ltr_frames, MAX_LTR_SLOTS)
     int current_ltr_slot = 0;      // Which LTR slot to mark next
     bool ltr_slots_valid[MAX_LTR_SLOTS] = {};
     uint64_t ltr_slot_frame_index[MAX_LTR_SLOTS] = {};  // Frame index when each LTR slot was marked
 
-    // Pending output stashed during SubmitInput retry
-    ::amf::AMFDataPtr pending_output;
+    // Pending outputs stashed during SubmitInput retry
+    std::deque<::amf::AMFDataPtr> pending_outputs;
+    std::unordered_map<uint64_t, bool> frame_rfi_flags;
 
     // Statistics feedback state
     bool statistics_enabled = false;

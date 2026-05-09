@@ -152,7 +152,23 @@ namespace amf {
       encoder->SetProperty(AMF_VIDEO_ENCODER_INPUT_QUEUE_SIZE, (amf_int64) 1);
       encoder->SetProperty(AMF_VIDEO_ENCODER_QUERY_TIMEOUT, (amf_int64) 1);
 
-      // LTR for RFI
+      // LTR for RFI (Reference Frame Invalidation, weak-network recovery).
+      //
+      // Disabled by default (max_ltr_frames == 0) to match FFmpeg amfenc behavior:
+      // FFmpeg's libavcodec/amfenc.c never sets MAX_LTR_FRAMES / LTR_MODE, so static
+      // screen regions are not pinned to a baseline LTR frame and never accumulate
+      // color-block artifacts.
+      //
+      // Trade-off when the user opts in (amd_ltr_frames >= 1):
+      //   + On lossy links, client-side reference invalidation can recover by
+      //     sending a P-frame referencing a known-good LTR slot instead of a full
+      //     IDR. IDRs are 10-20x larger than P-frames and themselves more likely
+      //     to be lost on weak networks, which can cascade into an "IDR storm".
+      //   - Static regions may inherit the IDR-time quantization noise of the
+      //     baseline LTR slot until motion forces a fresh intra block.
+      //
+      // The slot rotation / IDR-baseline preservation logic below (PR #630) only
+      // takes effect when LTR is opted in.
       max_ltr_frames = config.max_ltr_frames;
       if (max_ltr_frames > 0) {
         encoder->SetProperty(AMF_VIDEO_ENCODER_MAX_LTR_FRAMES, (amf_int64) max_ltr_frames);
@@ -217,6 +233,8 @@ namespace amf {
         encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_PROFILE, (amf_int64) AMF_VIDEO_ENCODER_HEVC_PROFILE_MAIN);
       }
 
+      // LTR for RFI - see H.264 block above for detailed trade-off rationale.
+      // Disabled by default; opt-in via amd_ltr_frames config.
       max_ltr_frames = config.max_ltr_frames;
       if (max_ltr_frames > 0) {
         encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_MAX_LTR_FRAMES, (amf_int64) max_ltr_frames);
@@ -298,6 +316,8 @@ namespace amf {
         encoder->SetProperty(AMF_VIDEO_ENCODER_AV1_AQ_MODE, (amf_int64) *config.pa_paq_mode);
       }
 
+      // LTR for RFI - see H.264 block above for detailed trade-off rationale.
+      // Disabled by default; opt-in via amd_ltr_frames config.
       max_ltr_frames = config.max_ltr_frames;
       if (max_ltr_frames > 0) {
         encoder->SetProperty(AMF_VIDEO_ENCODER_AV1_MAX_LTR_FRAMES, (amf_int64) max_ltr_frames);
@@ -595,7 +615,11 @@ namespace amf {
 
 
 
-    // Clamp effective LTR slots to what the encoder actually reserves
+    // Clamp effective LTR slots to what the encoder actually reserves.
+    // When max_ltr_frames == 0 (default), the entire LTR/RFI subsystem becomes
+    // a no-op: the IDR baseline marking, slot rotation, and invalidate handling
+    // below all gate on `effective_ltr_slots > 0`. The fallback for client-side
+    // invalidate_ref_frames in this case is force_idr=true (see video.cpp).
     effective_ltr_slots = (max_ltr_frames > 0) ? std::min(max_ltr_frames, MAX_LTR_SLOTS) : 0;
 
     // Reset LTR state
@@ -616,7 +640,8 @@ namespace amf {
 
   void
   amf_d3d11::destroy_encoder() {
-    pending_output = nullptr;
+    pending_outputs.clear();
+    frame_rfi_flags.clear();
     if (encoder) {
       encoder->Terminate();
       encoder = nullptr;
@@ -667,8 +692,10 @@ namespace amf {
 
     // Set crop to actual frame dimensions (hw surfaces can be vertically aligned by 16)
     surface->SetCrop(0, 0, encode_width, encode_height);
+    surface->SetPts(static_cast<amf_pts>(frame_index));
 
     // Set per-frame properties
+    bool frame_after_ref_frame_invalidation = false;
     if (force_idr) {
       if (video_format == 0) {
         surface->SetProperty(AMF_VIDEO_ENCODER_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_PICTURE_TYPE_IDR);
@@ -697,7 +724,10 @@ namespace amf {
         }
         ltr_slots_valid[0] = true;
         ltr_slot_frame_index[0] = frame_index;
-        current_ltr_slot = 1 % effective_ltr_slots;
+        // Slot 0 is reserved as the permanent IDR baseline. Periodic rotation
+        // begins at slot 1 (or stays at 0 when only a single slot exists, in
+        // which case the baseline must be sacrificed for fresher anchors).
+        current_ltr_slot = (effective_ltr_slots > 1) ? 1 : 0;
       }
     }
     else if (rfi_pending && effective_ltr_slots > 0) {
@@ -715,12 +745,13 @@ namespace amf {
       }
 
       rfi_pending = false;
-      result.after_ref_frame_invalidation = true;
+      frame_after_ref_frame_invalidation = true;
     }
     else if (effective_ltr_slots > 0 && (frame_index % LTR_MARK_INTERVAL) == 0) {
-      // Periodically mark current frame as LTR for future RFI use
-      // Only mark every LTR_MARK_INTERVAL frames to avoid limiting encoder reference freedom
-      // Only use slots < effective_ltr_slots (clamped to max_ltr_frames)
+      // Periodically mark current frame as LTR for future RFI use.
+      // Rotate through slots 1..N-1 so the IDR baseline in slot 0 stays valid
+      // even if every recent periodic anchor lands inside a loss burst. With a
+      // single slot configured, fall back to overwriting slot 0.
       if (video_format == 0) {
         surface->SetProperty(AMF_VIDEO_ENCODER_MARK_CURRENT_WITH_LTR_INDEX, (amf_int64) current_ltr_slot);
       }
@@ -732,8 +763,16 @@ namespace amf {
       }
       ltr_slots_valid[current_ltr_slot] = true;
       ltr_slot_frame_index[current_ltr_slot] = frame_index;
-      current_ltr_slot = (current_ltr_slot + 1) % effective_ltr_slots;
+      if (effective_ltr_slots > 1) {
+        current_ltr_slot++;
+        if (current_ltr_slot >= effective_ltr_slots) {
+          current_ltr_slot = 1;  // wrap, skipping the reserved slot 0
+        }
+      }
+      // else: stays at 0 (single-slot fallback)
     }
+
+    frame_rfi_flags[frame_index] = frame_after_ref_frame_invalidation;
 
     // Submit input — retry with output draining if input queue is full (like FFmpeg)
     res = encoder->SubmitInput(surface);
@@ -744,7 +783,7 @@ namespace amf {
         auto drain_res = encoder->QueryOutput(&drain_data);
         if (drain_data) {
           // Stash the output for later retrieval
-          pending_output = drain_data;
+          pending_outputs.push_back(drain_data);
         }
         if (drain_res != AMF_OK && !drain_data) {
           if (!query_timeout_supported) {
@@ -755,11 +794,13 @@ namespace amf {
       }
       if (res == AMF_INPUT_FULL) {
         BOOST_LOG(warning) << "AMF: SubmitInput still AMF_INPUT_FULL after retries, dropping frame " << frame_index;
+        frame_rfi_flags.erase(frame_index);
         return result;
       }
     }
     if (res != AMF_OK) {
       BOOST_LOG(error) << "AMF: SubmitInput failed, error: " << res;
+      frame_rfi_flags.erase(frame_index);
       // Check if the D3D11 device is lost (TDR, driver crash, etc.)
       if (device) {
         auto removed_reason = device->GetDeviceRemovedReason();
@@ -779,9 +820,9 @@ namespace amf {
 
     // Query output — if we already drained output during SubmitInput retry, use that
     ::amf::AMFDataPtr output_data;
-    if (pending_output) {
-      output_data = pending_output;
-      pending_output = nullptr;
+    if (!pending_outputs.empty()) {
+      output_data = pending_outputs.front();
+      pending_outputs.pop_front();
     }
     else {
       // Poll with retry: encoder may need a moment after SubmitInput
@@ -807,6 +848,19 @@ namespace amf {
       }
     }
     consecutive_empty_outputs = 0;
+
+    auto output_pts = output_data->GetPts();
+    if (output_pts >= 0) {
+      result.frame_index = static_cast<uint64_t>(output_pts);
+    }
+    auto rfi_flag = frame_rfi_flags.find(result.frame_index);
+    if (rfi_flag != frame_rfi_flags.end()) {
+      result.after_ref_frame_invalidation = rfi_flag->second;
+      frame_rfi_flags.erase(rfi_flag);
+    }
+    while (frame_rfi_flags.size() > 256) {
+      frame_rfi_flags.erase(frame_rfi_flags.begin());
+    }
 
     // Extract encoded bitstream
     ::amf::AMFBufferPtr buffer(output_data);

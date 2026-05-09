@@ -17,6 +17,7 @@
 #include <nlohmann/json.hpp>
 
 #include "clipboard_bridge.h"
+#include "clipboard_blob_store.h"
 #include "config.h"
 #include "logging.h"
 
@@ -252,6 +253,176 @@ namespace clipboard_http {
       g_subs.push_back(std::move(sub));
       ensure_inbound_sink_locked();
     }
+
+    // ---- Out-of-band blob endpoints ----
+    //
+    // Wire-frame KIND_REF carries metadata only; the actual bytes are pushed
+    // / pulled here. See clipboard_blob_store.h for storage policy.
+
+    // Strict RFC 6838-ish MIME validator. Accepts a single "type/subtype"
+    // pair; both halves must be non-empty and use only token characters
+    // [A-Za-z0-9!#$&^_.+-]. Total length capped at 128 chars. Parameters
+    // (e.g. "; charset=utf-8") are intentionally rejected to keep the value
+    // safe to reflect into a response Content-Type header.
+    static bool
+    is_valid_mime(const std::string &s) {
+      if (s.empty() || s.size() > 128) {
+        return false;
+      }
+      auto is_token_char = [](unsigned char c) {
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+          return true;
+        }
+        switch (c) {
+          case '!': case '#': case '$': case '&': case '^':
+          case '_': case '.': case '+': case '-':
+            return true;
+          default:
+            return false;
+        }
+      };
+      auto slash = s.find('/');
+      if (slash == std::string::npos || slash == 0 || slash + 1 >= s.size()) {
+        return false;
+      }
+      // Exactly one '/'.
+      if (s.find('/', slash + 1) != std::string::npos) {
+        return false;
+      }
+      for (std::size_t i = 0; i < s.size(); ++i) {
+        if (i == slash) {
+          continue;
+        }
+        if (!is_token_char(static_cast<unsigned char>(s[i]))) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    void
+    handle_blob_upload(const auth_fn &auth, resp_https_t resp, req_https_t req) {
+      if (!auth(resp, req)) {
+        return;
+      }
+      if (!config::input.clipboard_sync) {
+        resp->write(SimpleWeb::StatusCode::client_error_forbidden,
+          R"({"error":"clipboard_sync_disabled"})");
+        return;
+      }
+
+      auto mime_it = req->header.find("X-Clipboard-Mime");
+      if (mime_it == req->header.end() || mime_it->second.empty()) {
+        resp->write(SimpleWeb::StatusCode::client_error_bad_request,
+          R"({"error":"missing_mime"})");
+        return;
+      }
+      // Strict RFC 6838 token shape: type "/" subtype, each non-empty and made
+      // of [A-Za-z0-9!#$&^_.+-]. Length capped to keep logs/json bounded and
+      // to prevent the value being abused as an XSS vector when it is later
+      // echoed verbatim into the Content-Type header on the GET path.
+      if (!is_valid_mime(mime_it->second)) {
+        resp->write(SimpleWeb::StatusCode::client_error_bad_request,
+          R"({"error":"bad_mime"})");
+        return;
+      }
+
+      // Pre-flight on Content-Length so we don't even read a giant body.
+      auto content_length = req->header.find("Content-Length");
+      if (content_length != req->header.end() && !content_length->second.empty()) {
+        try {
+          if (std::stoull(content_length->second) > clipboard_blob_store::kMaxBlobBytes) {
+            resp->write(SimpleWeb::StatusCode::client_error_payload_too_large,
+              R"({"error":"payload_too_large"})");
+            return;
+          }
+        } catch (...) {
+          resp->write(SimpleWeb::StatusCode::client_error_bad_request,
+            R"({"error":"bad_content_length"})");
+          return;
+        }
+      }
+
+      std::stringstream ss;
+      ss << req->content.rdbuf();
+      const std::string body = ss.str();
+      if (body.empty()) {
+        resp->write(SimpleWeb::StatusCode::client_error_bad_request,
+          R"({"error":"empty_body"})");
+        return;
+      }
+      if (body.size() > clipboard_blob_store::kMaxBlobBytes) {
+        resp->write(SimpleWeb::StatusCode::client_error_payload_too_large,
+          R"({"error":"payload_too_large"})");
+        return;
+      }
+
+      clipboard_blob_store::payload_t bytes(body.begin(), body.end());
+      const std::size_t size = bytes.size();
+      auto put = clipboard_blob_store::put(std::move(bytes), mime_it->second);
+      if (!put.ok) {
+        nlohmann::json err;
+        err["error"] = put.err.empty() ? std::string { "put_failed" } : put.err;
+        resp->write(SimpleWeb::StatusCode::client_error_payload_too_large, err.dump());
+        return;
+      }
+
+      nlohmann::json out;
+      out["id"] = put.id;
+      out["size"] = size;
+      out["expires_in"] = clipboard_blob_store::kBlobTtlSeconds;
+
+      SimpleWeb::CaseInsensitiveMultimap headers;
+      headers.emplace("Content-Type", "application/json");
+      resp->write(SimpleWeb::StatusCode::success_ok, out.dump(), headers);
+    }
+
+    void
+    handle_blob_get(const auth_fn &auth, resp_https_t resp, req_https_t req) {
+      if (!auth(resp, req)) {
+        return;
+      }
+      if (!config::input.clipboard_sync) {
+        resp->write(SimpleWeb::StatusCode::client_error_forbidden,
+          R"({"error":"clipboard_sync_disabled"})");
+        return;
+      }
+
+      // path_match[1] is the captured <id>.
+      if (req->path_match.size() < 2) {
+        resp->write(SimpleWeb::StatusCode::client_error_bad_request,
+          R"({"error":"bad_id"})");
+        return;
+      }
+      const std::string id = req->path_match[1];
+
+      // Constrain to canonical UUID-v4 shape (36 chars, hex + dashes) to
+      // avoid the path regex accidentally matching weird inputs.
+      if (id.size() != 36) {
+        resp->write(SimpleWeb::StatusCode::client_error_not_found,
+          R"({"error":"not_found"})");
+        return;
+      }
+
+      auto got = clipboard_blob_store::get(id, /*consume=*/false);
+      if (!got.found) {
+        resp->write(SimpleWeb::StatusCode::client_error_not_found,
+          R"({"error":"not_found"})");
+        return;
+      }
+
+      SimpleWeb::CaseInsensitiveMultimap headers;
+      // The mime was validated at upload time (is_valid_mime) so reflecting it
+      // here is safe; nosniff defends against any UA that might still try to
+      // override the declared type when displaying the response inline.
+      headers.emplace("Content-Type", got.mime.empty() ? std::string { "application/octet-stream" } : got.mime);
+      headers.emplace("X-Content-Type-Options", "nosniff");
+      headers.emplace("Cache-Control", "no-store");
+      // Bytes-as-string copy: SimpleWebServer's `write(string)` is binary-safe
+      // (string isn't NUL-terminated-sensitive).
+      std::string body(reinterpret_cast<const char *>(got.bytes.data()), got.bytes.size());
+      resp->write(SimpleWeb::StatusCode::success_ok, body, headers);
+    }
   }  // namespace
 
   void
@@ -271,6 +442,18 @@ namespace clipboard_http {
     server.resource["^/api/v1/clipboard/events$"]["GET"] =
       [auth_cap](resp_https_t resp, req_https_t req) {
         handle_events(*auth_cap, std::move(resp), std::move(req));
+      };
+
+    server.resource["^/api/v1/clipboard/blob$"]["POST"] =
+      [auth_cap](resp_https_t resp, req_https_t req) {
+        handle_blob_upload(*auth_cap, std::move(resp), std::move(req));
+      };
+
+    // Capture group is the blob id. UUID-v4 canonical shape is 36 chars
+    // (hex+dashes); the regex is loose to allow other id schemes later.
+    server.resource["^/api/v1/clipboard/blob/([A-Za-z0-9_\\-]{1,128})$"]["GET"] =
+      [auth_cap](resp_https_t resp, req_https_t req) {
+        handle_blob_get(*auth_cap, std::move(resp), std::move(req));
       };
   }
 }  // namespace clipboard_http
