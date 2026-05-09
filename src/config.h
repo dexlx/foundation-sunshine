@@ -120,7 +120,8 @@ namespace config {
 
   // Voice changer backend selector for the inbound mic pipeline.
   constexpr int VOICE_CHANGER_BACKEND_PASSTHROUGH = 0;  // No DSP, direct PCM passthrough (default)
-  constexpr int VOICE_CHANGER_BACKEND_ONNX = 1;  // ONNX Runtime (RVC), see PR-B/PR-C
+  constexpr int VOICE_CHANGER_BACKEND_ONNX = 1;  // Reserved: in-process ONNX Runtime (not implemented; falls back to passthrough)
+  constexpr int VOICE_CHANGER_BACKEND_IPC = 2;  // External UDP loopback service (PR-B)
 
   struct voice_changer_t {
     bool enabled;  // Master switch; when false the entire DSP path is bypassed without per-frame cost.
@@ -128,6 +129,9 @@ namespace config {
     std::string model_path;  // Filesystem path to the model bundle (ONNX dir, .pt file, etc.). Backend-specific.
     int pitch_shift;  // Semitone offset applied by the backend; 0 = neutral. Range -24..24.
     int index_rate;  // 0..100 mapped to 0.0..1.0 by the backend; meaning is backend-specific (RVC: feature index blend).
+    std::string ipc_host;  // IPC backend: target host (loopback only is recommended).
+    int ipc_port;  // IPC backend: UDP port the inference service listens on.
+    int ipc_timeout_ms;  // IPC backend: per-frame response timeout in milliseconds.
   };
 
   struct audio_t {

@@ -8,6 +8,7 @@
  */
 
 #include "voice_changer.h"
+#include "voice_changer_ipc.h"
 
 #include "src/config.h"
 #include "src/logging.h"
@@ -55,9 +56,29 @@ namespace voice_changer {
         return std::make_unique<passthrough_t>();
 
       case config::VOICE_CHANGER_BACKEND_ONNX:
-        // PR-B will replace this branch with the ONNX Runtime backend.
-        BOOST_LOG(warning) << "Voice changer ONNX backend not implemented yet (PR-B); falling back to passthrough";
+        // PR-C may add an in-process ONNX backend; for now this slot is reserved.
+        BOOST_LOG(warning) << "Voice changer ONNX backend not implemented; falling back to passthrough";
         return std::make_unique<passthrough_t>();
+
+      case config::VOICE_CHANGER_BACKEND_IPC: {
+        ipc_options_t opts;
+        if (!cfg.ipc_host.empty()) {
+          opts.host = cfg.ipc_host;
+        }
+        if (cfg.ipc_port > 0 && cfg.ipc_port <= 65535) {
+          opts.port = static_cast<uint16_t>(cfg.ipc_port);
+        }
+        if (cfg.ipc_timeout_ms > 0) {
+          opts.timeout = std::chrono::milliseconds(cfg.ipc_timeout_ms);
+        }
+        BOOST_LOG(info) << "Voice changer backend: ipc " << opts.host << ":" << opts.port;
+        auto ipc = create_ipc(opts);
+        if (!ipc) {
+          BOOST_LOG(warning) << "Voice changer IPC init failed; falling back to passthrough";
+          return std::make_unique<passthrough_t>();
+        }
+        return ipc;
+      }
 
       default:
         BOOST_LOG(warning) << "Unknown voice changer backend " << cfg.backend << "; falling back to passthrough";

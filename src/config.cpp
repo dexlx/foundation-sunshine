@@ -477,6 +477,9 @@ namespace config {
       {},  // model_path
       0,  // pitch_shift
       75,  // index_rate (RVC default)
+      "127.0.0.1"s,  // ipc_host
+      9876,  // ipc_port
+      15,  // ipc_timeout_ms
     },
   };
 
@@ -1309,10 +1312,13 @@ namespace config {
 
     bool_f(vars, "voice_changer_enabled", audio.voice_changer.enabled);
     int_between_f(vars, "voice_changer_backend", audio.voice_changer.backend,
-                  { VOICE_CHANGER_BACKEND_PASSTHROUGH, VOICE_CHANGER_BACKEND_ONNX });
+                  { VOICE_CHANGER_BACKEND_PASSTHROUGH, VOICE_CHANGER_BACKEND_IPC });
     string_f(vars, "voice_changer_model_path", audio.voice_changer.model_path);
     int_between_f(vars, "voice_changer_pitch_shift", audio.voice_changer.pitch_shift, { -24, 24 });
     int_between_f(vars, "voice_changer_index_rate", audio.voice_changer.index_rate, { 0, 100 });
+    string_f(vars, "voice_changer_ipc_host", audio.voice_changer.ipc_host);
+    int_between_f(vars, "voice_changer_ipc_port", audio.voice_changer.ipc_port, { 1, 65535 });
+    int_between_f(vars, "voice_changer_ipc_timeout_ms", audio.voice_changer.ipc_timeout_ms, { 1, 1000 });
 
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, { "pc"sv, "lan"sv, "wan"sv });
 

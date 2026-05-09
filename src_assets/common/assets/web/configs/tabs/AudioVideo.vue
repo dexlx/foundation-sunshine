@@ -147,10 +147,51 @@ const cancelDownload = () => {
           </label>
           <select id="voice_changer_backend" class="form-select" v-model.number="config.voice_changer_backend">
             <option :value="0">{{ $tp('config.voice_changer_backend_passthrough', 'Passthrough (no DSP)') }}</option>
-            <option :value="1">{{ $tp('config.voice_changer_backend_onnx', 'ONNX / RVC (requires model)') }}</option>
+            <option :value="1">{{ $tp('config.voice_changer_backend_onnx', 'ONNX in-process (reserved)') }}</option>
+            <option :value="2">{{ $tp('config.voice_changer_backend_ipc', 'External service (UDP loopback)') }}</option>
           </select>
           <div class="form-text">
-            {{ $tp('config.voice_changer_backend_desc', 'Passthrough leaves audio untouched. ONNX runs RVC inference (model required).') }}
+            {{ $tp('config.voice_changer_backend_desc', 'Passthrough leaves audio untouched. External service sends each frame to a local Python/Go process over UDP.') }}
+          </div>
+        </div>
+        <div v-if="config.voice_changer_backend === 2" class="mb-2 row g-2">
+          <div class="col-sm-6">
+            <label for="voice_changer_ipc_host" class="form-label">
+              {{ $tp('config.voice_changer_ipc_host', 'Service host') }}
+            </label>
+            <input
+              type="text"
+              id="voice_changer_ipc_host"
+              class="form-control"
+              v-model="config.voice_changer_ipc_host"
+              placeholder="127.0.0.1"
+            />
+          </div>
+          <div class="col-sm-3">
+            <label for="voice_changer_ipc_port" class="form-label">
+              {{ $tp('config.voice_changer_ipc_port', 'Port') }}
+            </label>
+            <input
+              type="number"
+              id="voice_changer_ipc_port"
+              class="form-control"
+              min="1"
+              max="65535"
+              v-model.number="config.voice_changer_ipc_port"
+            />
+          </div>
+          <div class="col-sm-3">
+            <label for="voice_changer_ipc_timeout_ms" class="form-label">
+              {{ $tp('config.voice_changer_ipc_timeout_ms', 'Timeout (ms)') }}
+            </label>
+            <input
+              type="number"
+              id="voice_changer_ipc_timeout_ms"
+              class="form-control"
+              min="1"
+              max="1000"
+              v-model.number="config.voice_changer_ipc_timeout_ms"
+            />
           </div>
         </div>
         <div class="mb-2">
