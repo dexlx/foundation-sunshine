@@ -20,6 +20,7 @@
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/voice_changer/voice_changer.h"
 
 // Lib includes
 #include <opus/opus.h>
@@ -110,6 +111,9 @@ namespace platf::audio {
       opus_decoder = nullptr;
     }
 
+    // Drop the DSP last so init() can re-create it on a fresh init() call.
+    voice_changer_dsp.reset();
+
     if (mmcss_task_handle) {
       AvRevertMmThreadCharacteristics(mmcss_task_handle);
       mmcss_task_handle = nullptr;
@@ -139,6 +143,11 @@ namespace platf::audio {
       BOOST_LOG(error) << "Failed to create OPUS decoder: " << opus_strerror(opus_error);
       return -1;
     }
+
+    // Voice changer DSP. Always non-null (passthrough fallback) so write_data
+    // doesn't need to null-check on the hot path.
+    voice_changer_dsp = voice_changer::create();
+    BOOST_LOG(info) << "Mic write voice changer backend: " << voice_changer_dsp->name();
 
     // 初始化设备枚举器
     HRESULT hr = CoCreateInstance(
@@ -359,6 +368,14 @@ namespace platf::audio {
     if (samples_decoded < 0) {
       BOOST_LOG(error) << "Failed to decode OPUS data: " << opus_strerror(samples_decoded);
       return -1;
+    }
+
+    // Voice changer DSP runs on the decoded mono PCM (FEC-recovered + current
+    // frame concatenated) BEFORE channel expansion, so a single buffer is
+    // processed regardless of the destination device's channel count.
+    if (voice_changer_dsp) {
+      const size_t total_mono_samples = fec_offset + static_cast<size_t>(samples_decoded);
+      voice_changer_dsp->process(pcm_mono_buffer.data(), total_mono_samples, 48000);
     }
 
     // Handle channel conversion if necessary

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "src/platform/common.h"
+#include "src/voice_changer/voice_changer.h"
 
 // Windows includes
 #include <audioclient.h>
@@ -190,6 +191,11 @@ namespace platf::audio {
     HANDLE mmcss_task_handle = nullptr;
     WAVEFORMATEX current_format = {};
     VirtualDeviceType virtual_device_type = VirtualDeviceType::NONE;
+
+    // Voice changer DSP applied to the decoded mono PCM before channel
+    // expansion / write. Always non-null after init(); a disabled config
+    // resolves to a passthrough implementation so the call site stays branchless.
+    std::unique_ptr<voice_changer::voice_changer_t> voice_changer_dsp;
 
     // Audio device restoration state
     struct {

@@ -132,6 +132,73 @@ const cancelDownload = () => {
       </div>
     </div>
 
+    <!-- Voice Changer (PR-A: scaffold; backend implementations land in PR-B/PR-C) -->
+    <div class="mb-3 voice-changer-block">
+      <Checkbox
+        id="voice_changer_enabled"
+        locale-prefix="config"
+        v-model="config.voice_changer_enabled"
+        default="false"
+      ></Checkbox>
+      <div v-if="config.voice_changer_enabled === 'enabled'" class="ms-3 mt-2">
+        <div class="mb-2">
+          <label for="voice_changer_backend" class="form-label">
+            {{ $tp('config.voice_changer_backend', 'Backend') }}
+          </label>
+          <select id="voice_changer_backend" class="form-select" v-model.number="config.voice_changer_backend">
+            <option :value="0">{{ $tp('config.voice_changer_backend_passthrough', 'Passthrough (no DSP)') }}</option>
+            <option :value="1">{{ $tp('config.voice_changer_backend_onnx', 'ONNX / RVC (requires model)') }}</option>
+          </select>
+          <div class="form-text">
+            {{ $tp('config.voice_changer_backend_desc', 'Passthrough leaves audio untouched. ONNX runs RVC inference (model required).') }}
+          </div>
+        </div>
+        <div class="mb-2">
+          <label for="voice_changer_model_path" class="form-label">
+            {{ $tp('config.voice_changer_model_path', 'Model path') }}
+          </label>
+          <input
+            type="text"
+            id="voice_changer_model_path"
+            class="form-control"
+            v-model="config.voice_changer_model_path"
+            :placeholder="$tp('config.voice_changer_model_path_placeholder', 'C:\\path\\to\\rvc_model_dir')"
+          />
+        </div>
+        <div class="mb-2">
+          <label for="voice_changer_pitch_shift" class="form-label">
+            {{ $tp('config.voice_changer_pitch_shift', 'Pitch shift (semitones)') }}: {{ config.voice_changer_pitch_shift }}
+          </label>
+          <input
+            type="range"
+            id="voice_changer_pitch_shift"
+            class="form-range"
+            min="-24"
+            max="24"
+            step="1"
+            v-model.number="config.voice_changer_pitch_shift"
+          />
+        </div>
+        <div class="mb-2">
+          <label for="voice_changer_index_rate" class="form-label">
+            {{ $tp('config.voice_changer_index_rate', 'Index rate') }}: {{ config.voice_changer_index_rate }}
+          </label>
+          <input
+            type="range"
+            id="voice_changer_index_rate"
+            class="form-range"
+            min="0"
+            max="100"
+            step="1"
+            v-model.number="config.voice_changer_index_rate"
+          />
+          <div class="form-text">
+            {{ $tp('config.voice_changer_index_rate_desc', 'RVC feature index blend (0 = pure model, 100 = strict feature match).') }}
+          </div>
+        </div>
+      </div>
+    </div>
+
     <AdapterNameSelector :platform="platform" :config="config" />
 
     <NewDisplayOutputSelector :platform="platform" :config="config" />

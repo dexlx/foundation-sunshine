@@ -500,6 +500,8 @@
     "stream_mic_download_btn": "下载虚拟麦克风",
     "stream_mic_download_confirm": "即将跳转到虚拟麦克风下载页面，是否继续？",
     "stream_mic_note": "启用此功能需要安装虚拟麦克风",
+    "voice_changer_enabled": "启用变声器 (麦克风 DSP)",
+    "voice_changer_enabled_desc": "在 PCM 注入虚拟麦克风之前对入站麦克风音频应用实时 DSP。当前为脚手架，推理后端见 PR-B/PR-C。",
     "sunshine_name": "Sunshine 主机名称",
     "sunshine_name_desc": "在 Moonlight 中显示的名称。如果未指定，则使用 PC 的主机名",
     "sw_preset": "软件编码预设",

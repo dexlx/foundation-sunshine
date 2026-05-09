@@ -471,6 +471,13 @@ namespace config {
     true,  // stream audio
     true,  // stream_mic (enable microphone streaming from client)
     true,  // install_steam_drivers
+    voice_changer_t {
+      false,  // enabled (off by default; opt-in feature)
+      VOICE_CHANGER_BACKEND_PASSTHROUGH,  // backend
+      {},  // model_path
+      0,  // pitch_shift
+      75,  // index_rate (RVC default)
+    },
   };
 
   stream_t stream {
@@ -1299,6 +1306,13 @@ namespace config {
     bool_f(vars, "stream_audio", audio.stream);
     bool_f(vars, "stream_mic", audio.stream_mic);
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
+
+    bool_f(vars, "voice_changer_enabled", audio.voice_changer.enabled);
+    int_between_f(vars, "voice_changer_backend", audio.voice_changer.backend,
+                  { VOICE_CHANGER_BACKEND_PASSTHROUGH, VOICE_CHANGER_BACKEND_ONNX });
+    string_f(vars, "voice_changer_model_path", audio.voice_changer.model_path);
+    int_between_f(vars, "voice_changer_pitch_shift", audio.voice_changer.pitch_shift, { -24, 24 });
+    int_between_f(vars, "voice_changer_index_rate", audio.voice_changer.index_rate, { 0, 100 });
 
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, { "pc"sv, "lan"sv, "wan"sv });
 

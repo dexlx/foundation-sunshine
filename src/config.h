@@ -118,12 +118,25 @@ namespace config {
     bool wgc_disable_secure_desktop;  // Auto-disable UAC secure desktop when using WGC capture
   };
 
+  // Voice changer backend selector for the inbound mic pipeline.
+  constexpr int VOICE_CHANGER_BACKEND_PASSTHROUGH = 0;  // No DSP, direct PCM passthrough (default)
+  constexpr int VOICE_CHANGER_BACKEND_ONNX = 1;  // ONNX Runtime (RVC), see PR-B/PR-C
+
+  struct voice_changer_t {
+    bool enabled;  // Master switch; when false the entire DSP path is bypassed without per-frame cost.
+    int backend;  // VOICE_CHANGER_BACKEND_*; selects the implementation behind voice_changer::create()
+    std::string model_path;  // Filesystem path to the model bundle (ONNX dir, .pt file, etc.). Backend-specific.
+    int pitch_shift;  // Semitone offset applied by the backend; 0 = neutral. Range -24..24.
+    int index_rate;  // 0..100 mapped to 0.0..1.0 by the backend; meaning is backend-specific (RVC: feature index blend).
+  };
+
   struct audio_t {
     std::string sink;
     std::string virtual_sink;
     bool stream;
     bool stream_mic;
     bool install_steam_drivers;
+    voice_changer_t voice_changer;
   };
 
   constexpr int ENCRYPTION_MODE_NEVER = 0;  // Never use video encryption, even if the client supports it

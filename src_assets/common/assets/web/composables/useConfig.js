@@ -70,6 +70,11 @@ const DEFAULT_TABS = [
       max_bitrate: 0,
       variable_refresh_rate: 'disabled',
       minimum_fps_target: 0,
+      voice_changer_enabled: 'disabled',
+      voice_changer_backend: 0,
+      voice_changer_model_path: '',
+      voice_changer_pitch_shift: 0,
+      voice_changer_index_rate: 75,
     },
   },
   {
