@@ -1,6 +1,12 @@
 # Optional deps for the RVC backend.
 # Install with: pip install -r requirements-rvc.txt
 #
+# !!! Python 3.10 or 3.11 STRONGLY RECOMMENDED.
+# fairseq's C extensions don't build on Python 3.12+ (uses unmaintained
+# Cython APIs). On 3.12 you can still install torch + librosa + soundfile
+# and the sidecar will load — but RvcBackend.warmup() will report
+# "rvc package not installed" because rvc->fairseq fails to import.
+#
 # CUDA users: install torch from the matching CUDA index *before* this file:
 #   pip install torch --index-url https://download.pytorch.org/whl/cu121
 # CPU-only users can let the line below grab the CPU build automatically.
