@@ -13,8 +13,8 @@ rem the parsing to PowerShell and writes the registry directly via
 rem Set-ItemProperty (REG_EXPAND_SZ, no WM_SETTINGCHANGE broadcast — so no
 rem 5-second SendMessageTimeout wait per top-level window).
 rem ============================================================================
-set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem;%SystemRoot%\System32\WindowsPowerShell\v1.0"
 setlocal
+set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem;%SystemRoot%\System32\WindowsPowerShell\v1.0"
 
 if "%~1"=="" (
     echo Usage: %~nx0 [add^|remove]
