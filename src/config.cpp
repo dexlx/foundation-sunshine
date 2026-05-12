@@ -1613,15 +1613,9 @@ namespace config {
     // Exception: UCRT64 shortcut_launch instances may have no config loaded due to
     // insufficient permissions to create folder; port defaults will be acceptable.
     if (service_admin_launch) {
-      // This is a relaunch as admin to start the service.
+      // This is a relaunch as admin to start the service only.
+      // GUI is launched by the non-elevated parent after we return.
       service_ctrl::start_service();
-
-      // Reuse the elevation the user already granted for the service start
-      // to also launch the GUI here. The elevated token is inherited by the
-      // gui.exe child, so the user only sees ONE UAC prompt for the whole
-      // shortcut path instead of two.
-      service_ctrl::wait_for_ui_ready();
-      launch_ui();
 
       // Always return 1 to ensure Sunshine doesn't start normally
       return 1;
@@ -1646,18 +1640,15 @@ namespace config {
           return 1;
         }
 
-        // Wait for the elevated child to finish. That child already launched
-        // the GUI (see the service_admin_launch branch above), so we don't
-        // need to call launch_ui() here, which would trigger a second UAC.
+        // Wait for the elevated child to finish starting the service.
+        // Then launch the GUI from this non-elevated process (no UAC for GUI).
         WaitForSingleObject(shell_exec_info.hProcess, INFINITE);
         CloseHandle(shell_exec_info.hProcess);
       }
-      else {
-        // Service was already running: no elevated child was spawned, so we
-        // must launch the GUI ourselves. open_url() will prompt for UAC.
-        service_ctrl::wait_for_ui_ready();
-        launch_ui();
-      }
+
+      // Service is now running; launch GUI without elevation.
+      service_ctrl::wait_for_ui_ready();
+      launch_ui();
 
       // Always return 1 to ensure Sunshine doesn't start normally
       return 1;
