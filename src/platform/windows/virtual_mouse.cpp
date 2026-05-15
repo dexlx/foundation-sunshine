@@ -504,7 +504,6 @@ namespace platf {
       uint8_t buttons;
       int16_t dx = 0;
       int16_t dy = 0;
-      bool had_pending_movement = false;
 
       {
         std::lock_guard<std::mutex> lk(impl->state_mutex);
@@ -517,15 +516,19 @@ namespace platf {
           impl->accum_dx = 0;
           impl->accum_dy = 0;
           impl->accum_dirty = false;
-          had_pending_movement = true;
         }
       }
 
-      if (had_pending_movement) {
-        impl->sendReportDirect(buttons, dx, dy, 0, 0);
-      }
-
-      return impl->sendReportDirect(buttons, 0, 0, 0, 0);
+      // Single combined report: a HID mouse input report carries buttons +
+      // movement together, so we don't need a separate button-only follow-up.
+      // If movement was pending, fold it into this same report.
+      //
+      // Note: on send failure we do NOT re-queue dx/dy. The handle teardown
+      // path inside sendReportDirect already attempts an immediate reopen +
+      // resend, so a single dropped delta is rare. Re-queuing under the
+      // state_mutex here would also race with movement that arrived between
+      // the take above and the failure, producing out-of-order accumulation.
+      return impl->sendReportDirect(buttons, dx, dy, 0, 0);
     }
 
     bool
