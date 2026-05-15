@@ -151,6 +151,13 @@ namespace platf {
       // button/scroll paths don't race each other.
       std::mutex send_mutex;
 
+      // Throttle reopen attempts after the device disconnects (e.g. driver
+      // re-enumeration via `pnputil /remove-device` + `devcon install`).
+      // Without this, streaming would be permanently degraded to SendInput
+      // until the Sunshine service is restarted manually.
+      std::chrono::steady_clock::time_point last_reopen_attempt {};
+      static constexpr auto REOPEN_RETRY_INTERVAL = std::chrono::seconds(2);
+
       // Flush thread and timer.
       std::thread flush_thread;
       std::unique_ptr<high_precision_timer> flush_timer = create_high_precision_timer();
@@ -171,6 +178,13 @@ namespace platf {
 
       void
       start_flush_thread() {
+        // Guard: if a flush thread is already running (typical for the
+        // reopen-from-flush-thread path), do nothing. Replacing the
+        // std::thread object while the old one is joinable would call
+        // std::terminate() and crash the process.
+        if (flush_thread.joinable()) {
+          return;
+        }
         stop_requested.store(false, std::memory_order_release);
         flush_thread = std::thread([this]() {
           adjust_thread_priority(thread_priority_e::high);
@@ -181,12 +195,55 @@ namespace platf {
           while (!stop_requested.load(std::memory_order_acquire)) {
             if (!active) {
               std::unique_lock<std::mutex> lk(state_mutex);
-              wake_cv.wait(lk, [this]() {
+              // Wait with timeout so we can periodically poll for device
+              // re-arrival even when there is no pending input. Without this,
+              // an unplug/reinstall while the client has no input activity
+              // would leave the handle closed forever.
+              wake_cv.wait_for(lk, REOPEN_RETRY_INTERVAL, [this]() {
                 return stop_requested.load(std::memory_order_acquire) || accum_dirty;
               });
 
               if (stop_requested.load(std::memory_order_acquire)) {
                 break;
+              }
+
+              // Periodic re-acquire / liveness path: if device handle is closed,
+              // try to reopen even without input. If handle is open, query
+              // preparsed data as a read-only liveness ping so we can detect
+              // a silent driver removal and close the stale handle.
+              // Throttled by REOPEN_RETRY_INTERVAL.
+              //
+              // Drop state_mutex before taking send_mutex: every public API
+              // (move/button/scroll) takes state_mutex first and only then
+              // touches send_mutex via sendReportDirect, so reversing the
+              // order here would risk a future deadlock if any caller starts
+              // holding both at the same time.
+              if (!accum_dirty) {
+                lk.unlock();
+                std::lock_guard<std::mutex> send_lk(send_mutex);
+                const auto now = std::chrono::steady_clock::now();
+                if (now - last_reopen_attempt >= REOPEN_RETRY_INTERVAL) {
+                  last_reopen_attempt = now;
+                  if (hDevice == INVALID_HANDLE_VALUE) {
+                    if (open()) {
+                      VMOUSE_LOG(info) << "vmouse: Re-acquired virtual mouse device after disconnect (proactive)"sv;
+                    }
+                  }
+                  else {
+                    PHIDP_PREPARSED_DATA pp = nullptr;
+                    if (!HidD_GetPreparsedData(hDevice, &pp)) {
+                      // Treat any failure as device gone (the only documented
+                      // way this fails on a still-attached device is OOM).
+                      VMOUSE_LOG(warning) << "vmouse: Liveness ping failed, closing stale handle"sv;
+                      close();
+                      last_reopen_attempt = {};
+                    }
+                    else {
+                      HidD_FreePreparsedData(pp);
+                    }
+                  }
+                }
+                continue;
               }
 
               active = true;
@@ -351,7 +408,21 @@ namespace platf {
       bool
       sendReportDirect(uint8_t buttons, int16_t dx, int16_t dy, int8_t sv, int8_t sh) {
         std::lock_guard<std::mutex> send_lk(send_mutex);
-        if (hDevice == INVALID_HANDLE_VALUE) return false;
+
+        // If the handle was closed (device disconnected, driver reinstalled),
+        // try to re-open at most once every REOPEN_RETRY_INTERVAL so a
+        // back-to-back stream of input events doesn't enumerate HID devices on
+        // every call.
+        if (hDevice == INVALID_HANDLE_VALUE) {
+          const auto now = std::chrono::steady_clock::now();
+          if (now - last_reopen_attempt >= REOPEN_RETRY_INTERVAL) {
+            last_reopen_attempt = now;
+            if (open()) {
+              VMOUSE_LOG(info) << "vmouse: Re-acquired virtual mouse device after disconnect"sv;
+            }
+          }
+          if (hDevice == INVALID_HANDLE_VALUE) return false;
+        }
 
         auto report = detail::build_output_report(buttons, dx, dy, sv, sh);
 
@@ -360,10 +431,26 @@ namespace platf {
         if (!result) {
           DWORD err = GetLastError();
           if (detail::should_close_on_write_error(err)) {
-            VMOUSE_LOG(warning) << "vmouse: Device disconnected, closing handle"sv;
-            stop_requested.store(true, std::memory_order_release);
+            VMOUSE_LOG(warning) << "vmouse: Device disconnected, closing handle (will retry)"sv;
             close();
-            wake_cv.notify_one();
+            // Do NOT stop the flush thread here: keeping it alive lets queued
+            // mouse movement be flushed automatically once the device is back.
+            //
+            // Zero-latency recovery: try to reopen and resend immediately so
+            // the current input event isn't dropped. The new PDO is usually
+            // already enumerable by the time HidD_SetFeature returns the
+            // error. Bookkeep last_reopen_attempt so the flush-thread
+            // heartbeat doesn't re-attempt within REOPEN_RETRY_INTERVAL.
+            last_reopen_attempt = std::chrono::steady_clock::now();
+            if (open()) {
+              VMOUSE_LOG(info) << "vmouse: Re-acquired virtual mouse device after disconnect (immediate)"sv;
+              if (HidD_SetFeature(hDevice, (PVOID) report.data(), static_cast<ULONG>(report.size()))) {
+                return true;
+              }
+              // Reopen succeeded but write still failed — fall through and let
+              // future calls retry. Don't close again; the handle may still be
+              // valid, just temporarily refusing.
+            }
           }
           return false;
         }
@@ -388,10 +475,14 @@ namespace platf {
 
     bool
     device_t::move(int16_t delta_x, int16_t delta_y) {
-      if (!impl || impl->hDevice == INVALID_HANDLE_VALUE) {
+      if (!impl) {
         return false;
       }
 
+      // Even if hDevice is currently INVALID (driver disconnect / re-install),
+      // we keep accumulating so that when the flush thread or the next
+      // button/scroll call re-opens the device, the latest deltas are flushed
+      // out instead of getting silently dropped.
       bool should_notify = false;
       {
         std::lock_guard<std::mutex> lk(impl->state_mutex);
