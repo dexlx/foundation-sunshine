@@ -598,6 +598,8 @@
     "wgc_control_panel_only": "此功能仅在 Sunshine Control Panel 中可用",
     "wgc_disable_secure_desktop": "自动提升 UAC（WGC 模式）",
     "wgc_disable_secure_desktop_desc": "使用 WGC 捕获时，临时禁用 UAC 提示，管理员权限请求将自动通过而不弹出确认对话框。这可以避免远程串流时 UAC 弹窗导致的中断。串流结束后自动恢复原始 UAC 设置。警告：这会降低系统安全性——串流期间任何程序请求管理员权限将被静默提升。",
+    "dynamic_resolution_follow_display": "串流中跟随主机分辨率变化",
+    "dynamic_resolution_follow_display_desc": "启用时（默认），主机桌面分辨率在串流期间发生变化，编码器会按新分辨率重建，并通过协议扩展消息通知客户端重建解码器。Moonlight 桌面 / Android / iOS 客户端能正常处理。如果客户端是不支持该扩展的旧端（例如 PSVita Moonlight），请关闭此项——串流分辨率会保持初始值，由编码器的缩放器适配桌面变化，行为与上游 Sunshine 一致。",
     "wgc_mode_switch_failed": "切换模式失败",
     "wgc_mode_switch_started": "模式切换已启动，如果弹出 UAC 提示，请点击\"是\"以确认。",
     "wgc_service_mode_warning": "WGC 捕获需要在用户模式下运行。如果当前以服务模式运行，请点击上方按钮切换到用户模式。",

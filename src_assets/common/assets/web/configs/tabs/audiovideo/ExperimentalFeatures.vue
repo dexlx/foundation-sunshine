@@ -88,6 +88,15 @@ function addRemapping(type) {
                 default="false"
               ></Checkbox>
 
+              <!-- Dynamic Resolution Follow Display -->
+              <Checkbox
+                class="mb-3"
+                id="dynamic_resolution_follow_display"
+                locale-prefix="config"
+                v-model="config.dynamic_resolution_follow_display"
+                default="true"
+              ></Checkbox>
+
               <!-- Capture Compute Shader (HDR RGB->P010 fast path) -->
               <div class="mb-3">
                 <label for="capture_compute_shader" class="form-label">

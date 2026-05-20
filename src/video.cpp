@@ -3260,22 +3260,31 @@ namespace video {
         last_display_width = current_width;
         last_display_height = current_height;
 
-        if (is_rotation) {
-          std::swap(initial_scale_x, initial_scale_y);
+        if (!config::video.dynamic_resolution_follow_display) {
+          // Toggle off: keep the originally negotiated stream resolution and let the
+          // encoder's scaler adapt. Avoids sending SS_RESOLUTION_CHANGE, which legacy
+          // Moonlight clients (e.g. PSVita port) don't implement and would freeze on.
+          BOOST_LOG(info) << "dynamic_resolution_follow_display=false: keeping stream at "
+                          << config.width << "x" << config.height << " (scaler will adapt)";
         }
+        else {
+          if (is_rotation) {
+            std::swap(initial_scale_x, initial_scale_y);
+          }
 
-        config.width = compute_aligned_resolution(current_width, initial_scale_x);
-        config.height = compute_aligned_resolution(current_height, initial_scale_y);
+          config.width = compute_aligned_resolution(current_width, initial_scale_x);
+          config.height = compute_aligned_resolution(current_height, initial_scale_y);
 
-        BOOST_LOG(info) << "New encoding resolution: " << config.width << "x" << config.height
-                        << " (scale: " << initial_scale_x << "x" << initial_scale_y << ")";
+          BOOST_LOG(info) << "New encoding resolution: " << config.width << "x" << config.height
+                          << " (scale: " << initial_scale_x << "x" << initial_scale_y << ")";
 
-        resolution_change_event->raise(std::make_pair(
-          static_cast<std::uint32_t>(current_width),
-          static_cast<std::uint32_t>(current_height)));
+          resolution_change_event->raise(std::make_pair(
+            static_cast<std::uint32_t>(current_width),
+            static_cast<std::uint32_t>(current_height)));
 
-        idr_events->raise(true);
-        std::this_thread::sleep_for(100ms);
+          idr_events->raise(true);
+          std::this_thread::sleep_for(100ms);
+        }
       }
 
       auto &encoder = *chosen_encoder;

@@ -596,6 +596,8 @@
     "wgc_control_panel_only": "This feature is only available in Sunshine Control Panel",
     "wgc_disable_secure_desktop": "Auto-Elevate UAC (WGC Mode)",
     "wgc_disable_secure_desktop_desc": "When using WGC capture, temporarily disable UAC prompts by auto-elevating admin requests without user confirmation. This allows seamless remote operation without UAC dialog interruptions. The original UAC settings are restored when streaming ends. WARNING: This reduces system security — any program requesting admin privileges will be silently elevated during streaming.",
+    "dynamic_resolution_follow_display": "Follow Host Display Resolution Mid-Stream",
+    "dynamic_resolution_follow_display_desc": "When enabled (default), if the host display resolution changes during a stream, the encoder re-initializes at the new resolution and a protocol extension message tells the client to re-create its decoder. Modern Moonlight clients (Desktop / Android / iOS) handle this seamlessly. Disable this option for legacy clients that don't implement the extension (e.g. PSVita Moonlight) — the stream resolution will then stay fixed and the encoder's scaler will adapt to host display changes, matching upstream Sunshine behavior.",
     "wgc_mode_switch_failed": "Failed to switch mode",
     "wgc_mode_switch_started": "Mode switch initiated. If a UAC prompt appears, please click 'Yes' to confirm.",
     "wgc_service_mode_warning": "WGC capture requires running in user mode. If currently running in service mode, please click the button above to switch to user mode.",
