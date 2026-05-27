@@ -421,11 +421,33 @@ namespace display_device {
   void
   session_t::update_vdd_resolution(const parsed_config_t &config,
     const vdd_utils::VddSettings &vdd_settings) {
+    if (!config.resolution || !config.refresh_rate) {
+      BOOST_LOG(debug) << "VDD session mode update skipped: resolution or refresh rate is not set";
+      return;
+    }
+
     const auto new_setting = to_string(*config.resolution) + "@" + to_string(*config.refresh_rate);
 
     if (last_vdd_setting == new_setting) {
       BOOST_LOG(debug) << "VDD配置未变更: " << new_setting;
       return;
+    }
+
+    const auto setmodes_result = vdd_utils::set_vdd_session_mode(config);
+    switch (setmodes_result) {
+      case vdd_utils::set_vdd_result::ok:
+        last_vdd_setting = new_setting;
+        BOOST_LOG(info) << "VDD会话模式更新完成（未写入XML）: " << new_setting;
+        return;
+      case vdd_utils::set_vdd_result::failed:
+        BOOST_LOG(error) << "VDD SETMODES 被驱动拒绝，跳过 XML 回退以避免运行态/持久态不一致: " << new_setting;
+        return;
+      case vdd_utils::set_vdd_result::invalid_config:
+        BOOST_LOG(warning) << "VDD 会话模式参数无效，跳过更新: " << new_setting;
+        return;
+      case vdd_utils::set_vdd_result::interface_missing:
+        // Old driver without IOCTL: fall through to persistent XML + reload path below.
+        break;
     }
 
     if (!confighttp::saveVddSettings(vdd_settings.resolutions, vdd_settings.fps, config::video.adapter_name)) {
