@@ -17,6 +17,7 @@
 #include <cmath>
 #include <filesystem>
 #include <future>
+#include <locale>
 #include <sstream>
 #include <thread>
 #include <unordered_set>
@@ -296,6 +297,28 @@ namespace display_device {
     }
 
     bool
+    persist_hardware_cursor_setting(bool enabled) {
+      const auto settings_path = std::filesystem::path(platf::appdata()) / "vdd_settings.xml";
+
+      try {
+        pt::ptree root;
+        if (std::filesystem::exists(settings_path)) {
+          pt::read_xml(settings_path.string(), root);
+        }
+
+        root.put("vdd_settings.cursor.HardwareCursor", enabled ? "true" : "false");
+
+        auto setting = boost::property_tree::xml_writer_make_settings<std::string>(' ', 2);
+        pt::write_xml(settings_path.string(), root, std::locale(), setting);
+        return true;
+      }
+      catch (const std::exception &e) {
+        BOOST_LOG(warning) << "Unable to persist VDD HardwareCursor setting: " << e.what();
+        return false;
+      }
+    }
+
+    bool
     ensure_hardware_cursor_disabled_for_capture(bool *changed) {
       if (changed) {
         *changed = false;
@@ -327,6 +350,21 @@ namespace display_device {
 
       BOOST_LOG(info) << "Disabling VDD HardwareCursor because direct VDD capture only receives the shared framebuffer texture";
       if (!set_hardware_cursor_enabled(false)) {
+        return false;
+      }
+
+      bool persisted = false;
+      for (int attempt = 0; attempt < kMaxRetryCount; ++attempt) {
+        if (persist_hardware_cursor_setting(false)) {
+          persisted = true;
+          break;
+        }
+
+        std::this_thread::sleep_for(calculate_exponential_backoff(attempt));
+      }
+
+      if (!persisted) {
+        BOOST_LOG(error) << "VDD HardwareCursor disabled in driver, but failed to persist vdd_settings.xml";
         return false;
       }
 
